@@ -1,0 +1,156 @@
+\documentclass[12pt]{book}
+
+\usepackage[acronym]{glossaries}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{systeme}
+\usepackage{algorithm,algpseudocode}
+\usepackage{afterpage}
+\usepackage[a4paper, total={6in, 10in}]{geometry}
+\usepackage{scrextend}
+\usepackage{tcolorbox}
+\usepackage{polynom}
+
+\pagestyle{plain}
+
+\newcommand{\example}[1]{
+    \begin{addmargin}[1em]{1em}
+    \begin{tcolorbox}
+    #1
+    \end{tcolorbox}
+    \end{addmargin}
+}
+
+\newcommand{\mychapter}[1]{
+    \renewcommand\chaptername{}
+    \renewcommand\thechapter{}
+    \chapter{#1}
+    \renewcommand\thechapter{1}
+}
+
+\newcommand{\code}[1]{
+    {\color{blue}\texttt{#1}}
+}
+
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{gray}{rgb}{0.5,0.5,0.5}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+
+% This `if` statement stands here just to comment out 
+% examples of figure and listing.
+\iffalse
+% Example of figure.
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.5]{Resources/Lecture_2/co_np.png}
+\caption{Co-NP problems}
+\label{fig:co_np}
+\end{figure}
+
+% Example of listing.
+\begin{lstlisting}[
+    language=Verilog,
+    caption=SystemVerilog packed/unpacked arrays,
+    columns=flexible,
+    basicstyle={\footnotesize\ttfamily},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{dkgreen},
+    stringstyle=\color{mauve},
+    tabsize=4
+]
+bit [3:0] data; // packed array
+logic queue [3:0]; // unpacked array
+\end{lstlisting}
+
+% Example of table.
+\begin{center}
+\begin{tabular}{|c|c|c|}
+    \hline
+    & this entry & mirror entry \\
+    \hline
+    distance to the closest cluster & 10 & 6 \\
+    \hline
+    distance to the second closest cluster & 12 & 8 \\
+    \hline
+\end{tabular}
+\end{center}
+\fi
+
+
+
+\begin{document}
+
+\mychapter{Linux driver for HC-06 Bluetooth module}
+\section{Overview}
+This project implements a Linux device driver for HC-06 bluetooth module, which is usually used to give different 
+microcontrollers a bluetooth capability (see reference manual for HC-06 bluetooth device: 
+\href{https://components101.com/sites/default/files/component_datasheet/HC06%20Bluetooth%20Module%20Datasheet.pdf}{
+HC-06 module reference manual}).
+
+The whole \emph{gist} of this project will be based around using this hardware module directly with Linux machine, 
+i.e. PC, rather than a microcontroller with UART interface. Thus, for this purpose, we will write a Linux module
+for this bluetooth device in order to be able to load it, whenever we need it, and test it on some bluetooth 
+compatible devices.
+
+The board that us used in this project, where the actual HC-06 module is placed on is an Arduino compatible board
+with description of it being provided here: \href{https://components101.com/wireless/hc-06-bluetooth-module-pinout-datasheet}{
+HC-06 board description}. From now on, in the context of this project, this board itself will be called as HC-06, for the 
+convenience of it.
+
+In order to communicate with the board, we have to be able to convert USB communication to UART, thus FTDI module 
+is used for it: 
+\href{https://www.digitec.ch/en/s1/product/deek-robot-dk-ftdi-isp-breakout-335v-power-component-electronics-modules-5997850}{
+FTDI board description}.
+
+\section{Pinout and connection}
+
+\section{Interfacing with HC-06 module via command line interface}
+We can interface with HC-06 module via passing it commands (including the fact that there is a FTDI module between our machine 
+and HC-06 to be able to convert USB communication to UART), as it is mentioned here: 
+\href{https://components101.com/wireless/hc-06-bluetooth-module-pinout-datasheet}{HC-06 board description} with actual commands 
+being described here: \href{http://wiki.sunfounder.cc/images/7/7b/HC-06_AT_Commands_Reference.pdf}{HC-06 commands}.
+
+\section{Linux device driver}
+As it is mentioned in 
+\href{https://www.digitec.ch/en/s1/product/deek-robot-dk-ftdi-isp-breakout-335v-power-component-electronics-modules-5997850}{
+FTDI board description}, Linux already has a Virtual COM Port (VCP) driver by default loaded for FTDI, which are 
+\code{ftdi\_sio} and \code{usbserial} (although, in my Linux installation, which is Arch 6.12.4-arch1-1, \code{usbserial} 
+module wasn't loaded and only \code{ftdi\_sio} was loaded). Thus, if we want to write our own driver for FTDI, we would 
+have to unload those \code{ftdi\_sio} and \code{usbserial} modules (only \code{ftdi\_sio} in my case, as \code{usbserial}
+is not even loaded on my machine).
+
+Once we connect our FTDI module to our machine a device file can be found in \code{/dev/} directory, in my case, it is 
+\code{/dev/ttyUSB0}. This way, we can communicate with our FTDI module via writing to and reading from \code{/dev/ttyUSB0}
+file.
+
+\section{Communication via terminal}
+As it is explained in the HC-06 datasheet, it expects commands, when it is in AT mode, in an interval of 1 second with 
+no newlines and carriage returns required, thus we should send the commands as a string, rather than immediately sending
+each character, like \code{minicom} and \code{screen} do by default.
+
+That is why, an easy setup is setting our devices permissions via \code{chmod o+rw /dev/ttyUSB1} and opening 2 terminals:
+\begin{enumerate}
+    \item One with \code{cat /dev/ttyUSB1}, where we will see all the messages transmitted from the bluetooth module.
+    \item One where we can send our commands via \code{echo}, e.g. 
+    
+        \code{echo 'AT+NAMEABCDE'>/dev/ttyUSB1}.
+\end{enumerate}
+
+Another option is to use PuTTY with option \textbf{Local line editing} set to \textbf{Force on}, as it is explained here:
+\href{https://stackoverflow.com/questions/4999280/how-to-send-characters-in-putty-serial-communication-only-when-pressing-enter}{
+Setting PuTTY to send data serially only on \emph{Enter} key press}.
+
+\section{Issue with AT command not working}
+Command \code{AT}, which should make bluetooth module send \code{OK}, doesn't work on my device, although, setting name
+with \code{AT+NAMEMY-HC-06} worked and I got \code{OKsetname} back from the bluetooth module. The similar issue is 
+described in this thread: \href{https://forum.arduino.cc/t/solved-hc-06-just-wont-talk-with-windows-for-at-commands/665785/8}{
+issue with HC-06 \code{AT} command}.
+
+
+
+\end{document}
