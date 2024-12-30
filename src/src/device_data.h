@@ -23,11 +23,6 @@
  */
 struct device_data {
     /**
-     * Kernel structure of this device.
-     */
-	struct cdev m_cdev;
-
-    /**
      * Mutex, which is locked and unlocked in `read()` and `write()` file 
      * operations to allow only one process to read from/write to this device.
      */

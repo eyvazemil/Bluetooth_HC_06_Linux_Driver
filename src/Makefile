@@ -2,10 +2,14 @@ KERNEL_DIR = /lib/modules/$(shell uname -r)/build
 PWD = $(shell pwd)
 BUILD_DIR = Build
 SRC_DIR = src
+
+# Will be used as the name of our kernel module.
 MODULE_NAME = emil_bluetooth_driver
-DEVICE_CLASS_NAME = emil_bluetooth_driver_devices_class
 KERNEL_OBJECT_NAME = $(MODULE_NAME).ko
 CHMOD_PERM = 666
+
+# Will be used as the name of our USB device in sysfs, i.e. `/dev/` directory.
+DEVICE_CLASS_NAME = emil_hc_06_dev
 
 # Major version of the driver, which is read from the `/proc/devices`
 # file, once `insmod` command has been called with the driver `.ko` file 
@@ -21,7 +25,8 @@ obj-m += $(MODULE_NAME).o
 
 # In case if `hello.c` includes other files, e.g. `file1.c` and `file2.c`,
 # we can list them, as it is shown below (via <module_name>-objs).
-emil_bluetooth_driver-objs += $(SRC_DIR)/main.o $(SRC_DIR)/char_device_registration.o $(SRC_DIR)/device_file_operations.o
+emil_bluetooth_driver-objs += $(SRC_DIR)/main.o $(SRC_DIR)/device_file_operations.o \
+	$(SRC_DIR)/ftdi_usb_driver.o
 
 # We set the macro `DEBUG_MODE` in our code, to indicate that we are executing
 # in debug mode, thus we can print messages for debugging.
@@ -49,8 +54,8 @@ load:
 	sudo insmod $(BUILD_DIR)/$(KERNEL_OBJECT_NAME) g_module_name="${MODULE_NAME}" \
 		g_device_class_name="${DEVICE_CLASS_NAME}"
 
-# 	Set permissions to the created devices in sysfs.
-	sudo chmod 666 /dev/${MODULE_NAME}
+# 	Set permissions to the created device in sysfs.
+	sudo chmod 666 /dev/${DEVICE_CLASS_NAME}0
 
 # Prints `Error 1` if our module hasn't been loaded, otherwise,
 # it returns our module name.
@@ -60,7 +65,7 @@ find_module:
 # Systemd keeps journal that has kernel logs, which could be printed 
 # to the screen via `journalctl`.
 check_logs:
-	dmesg | tail -5
+	sudo dmesg | tail -10
 
 # Unload our module via `rmmod` command. Device files associtated with this 
 # driver in `/dev/` directory will be removed in the exit function.

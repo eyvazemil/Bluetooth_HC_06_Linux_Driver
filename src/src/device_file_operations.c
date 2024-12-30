@@ -1,33 +1,68 @@
-#include "custom_macros.h"
 #include "device_file_operations.h"
+#include "custom_macros.h"
 #include "device_data.h"
 
-/**
- * Header that contains many definitions of functions and symbols
- * needed by the loadable modules.
- */
 #include <linux/module.h>
-
-/** Header with `file_operations` structure that we supply our functions
- * with in order for the user to be able to make system calls that will
- * call our functions.
- */
 #include <linux/fs.h>
-
-/** Header with declaration of `container_of()` function, which is used
- * to find the container, where a given member with the given value is 
- * located.
- */
 #include <linux/kernel.h>
-
-/** Header with declaration of `copy_to_user()` and `copy_from_user()`
- * functions.
- */
 #include <asm/uaccess.h>
-
-/** Header with declaration of error values. */
 #include <linux/errno.h>
+#include <linux/usb.h>
 
+
+// ---------------------------------------------------------------------
+// Definition of functions that allocate and free device data structure.
+// ---------------------------------------------------------------------
+
+/**
+ * Device data for storing data from read and write file operations.
+ */
+struct device_data * g_device_data = NULL;
+
+int device_data_allocate(void) {
+    // Allocate device data and memset it to 0.
+	g_device_data = kmalloc(sizeof(struct device_data), GFP_KERNEL);
+
+	if (!g_device_data) {
+		device_data_free();
+		return -ENOMEM;
+	}
+
+	memset(g_device_data, 0, sizeof(struct device_data));
+
+	// Initialize this device buffer and memset it to 0.
+    const int device_buffer_size = 100;
+    g_device_data->m_device_buffer_size = device_buffer_size;
+	g_device_data->m_device_buffer_data_len = 0;
+    g_device_data->m_device_buffer = kmalloc(
+        device_buffer_size * sizeof(char), GFP_KERNEL
+    );
+
+    if(!g_device_data->m_device_buffer) {
+        device_data_free();
+        return -ENOMEM;
+    }
+
+    memset(g_device_data->m_device_buffer, 0, device_buffer_size * sizeof(char));
+
+    // Initialize mutex.
+    mutex_init(&(g_device_data->m_mutex));
+
+    return 0;
+}
+
+void device_data_free(void) {
+    if(g_device_data) {
+		// Uninitialize this device only if the device data was successfully allocated.
+		if(g_device_data->m_device_buffer) {
+            // Unitialize this device if the device buffer was 
+            // successfully allocated.
+            kfree(g_device_data->m_device_buffer);
+        }
+
+		kfree(g_device_data);
+	}
+}
 
 // -------------------------------------------------------------
 // Declaration of `file_operations` structure and its functions.
@@ -74,31 +109,10 @@ struct file_operations * get_file_operations(void) {
 // -------------------------------------------------------
 
 int device_open(struct inode * inode, struct file * filep) {
-    // Retrieve the structure with our device data.
-    // This is done via calling `container_of()` function, 
-    // which finds the `m_cdev` member in `device_data` structure,
-    // which is equal to the `cdev` structure in `inode`.
-    struct device_data * device_data = container_of(
-        inode->i_cdev, struct device_data, m_cdev
-    );
-
-    // Pass the found `device_data` structure as a private field
-    // of `file` structure, which could be used in `read()` and 
-    // `write()` functions.
-    filep->private_data = device_data;
-
-    printk(KERN_ALERT "device_open() was called on device.\n");
-
     return 0;
 }
 
 int device_release(struct inode * inode, struct file * filep) {
-    struct device_data * device_data = filep->private_data;
-    printk(KERN_ALERT "device_release() was called on device.\n");
-
-    // There is not much to be done right now, as there is no actual 
-    // hardware device that is connected to this device node, thus we
-    // simply return.
     return 0;
 }
 
@@ -106,10 +120,6 @@ ssize_t device_read(
 	struct file * filep, char __user * user_buffer,
 	size_t num_bytes, loff_t * file_offset
 ) {
-    // Get the structure with device data from the `file` structure's
-    // `private_data` member, that we set in `device_open()` function.
-    struct device_data * device_data = filep->private_data;
-
     // As we are accessing the device data here, which could be written to by another process,
     // we have to lock on mutex before proceeding any further.
     // We lock in interruptible fashion, so that the user could kill the process. As this function,
@@ -118,20 +128,20 @@ ssize_t device_read(
     // Function `mutex_lock_interruptible()` returns a non-zero code, once interrupted via user, thus we have to check
     // its return value and in case if it is non-zero, we return `-ERESTARTSYS`, which will make the kernel to
     // try to restart the call from the beginning or return an error to the user.
-    if(mutex_lock_interruptible(&(device_data->m_mutex))) {
+    if(mutex_lock_interruptible(&(g_device_data->m_mutex))) {
         // Waiting on mutex has been interrupted, thus no mutex was acquired and we don't have to unlock it.
         return -ERESTARTSYS;
     }
 
     // -- CRITICAL SECTION BEGIN --
-    const int device_buffer_size = device_data->m_device_buffer_size;
+    const int device_buffer_size = g_device_data->m_device_buffer_size;
 
     if(*file_offset >= device_buffer_size) {
         // If the file offset is already at the end of the device buffer
         // or is even beyond it, then we don't read anything from the device.
         // Before returning, we have to unlock the mutex.
         // -- CRITICAL SECTION END --
-        mutex_unlock(&(device_data->m_mutex));
+        mutex_unlock(&(g_device_data->m_mutex));
         return 0;
     }
 
@@ -143,29 +153,27 @@ ssize_t device_read(
     }
 
     if(copy_to_user(user_buffer, ((char *) 
-        device_data->m_device_buffer) + *file_offset, num_bytes)
+        g_device_data->m_device_buffer) + *file_offset, num_bytes)
     ) {
         // In case if copying to the user buffer has failed,
         // return `-EFAULT`, which means "bad address".
         // Before returning, we have to unlock the mutex.
         // -- CRITICAL SECTION END --
-        mutex_unlock(&(device_data->m_mutex));
+        mutex_unlock(&(g_device_data->m_mutex));
         return -EFAULT;
     }
 
     // Debug info.
-    printk(KERN_ALERT "device_read()>> %zd bytes of data was read from device.\n", num_bytes);
+    PRINT_DEBUG("device_read(): %zd bytes of data was read from device.\n", num_bytes);
 
     for(int i = 0; i < num_bytes; ++i) {
-        printk(KERN_ALERT "%c", *(((char *) 
-            device_data->m_device_buffer) + *file_offset + i)
-        );
+        PRINT_DEBUG("%c", *(((char *) g_device_data->m_device_buffer) + *file_offset + i));
     }
 
-    printk(KERN_ALERT "\n");
+    PRINT_DEBUG("\n");
 
     // -- CRITICAL SECTION END --
-    mutex_unlock(&(device_data->m_mutex));
+    mutex_unlock(&(g_device_data->m_mutex));
 
     // Update the offset of the device buffer.
     *file_offset += num_bytes;
@@ -178,25 +186,21 @@ ssize_t device_write(
 	struct file * filep, const char __user * user_buffer,
 	size_t num_bytes, loff_t * file_offset
 ) {
-    // Get the structure with device data from the `file` structure's
-    // `private_data` member, that we set in `device_open()` function.
-    struct device_data * device_data = filep->private_data;
-
     // The same logic with mutex locking as in `device_read()` function.
-    if(mutex_lock_interruptible(&(device_data->m_mutex))) {
+    if(mutex_lock_interruptible(&(g_device_data->m_mutex))) {
         // Waiting on mutex has been interrupted, thus no mutex was acquired and we don't have to unlock it.
         return -ERESTARTSYS;
     }
 
     // -- CRITICAL SECTION BEGIN --
-    const int device_buffer_size = device_data->m_device_buffer_size;
+    const int device_buffer_size = g_device_data->m_device_buffer_size;
 
     if(*file_offset >= device_buffer_size) {
         // If the file offset is already at the end of the device buffer
         // or is even beyond it, then we don't write anything to the device.
         // Before returning, we have to unlock the mutex.
         // -- CRITICAL SECTION END --
-        mutex_unlock(&(device_data->m_mutex));
+        mutex_unlock(&(g_device_data->m_mutex));
         return 0;
     }
 
@@ -207,33 +211,31 @@ ssize_t device_write(
         num_bytes = device_buffer_size - *file_offset;
     }
 
-    if(copy_from_user(((char *) device_data->m_device_buffer) + *file_offset,
+    if(copy_from_user(((char *) g_device_data->m_device_buffer) + *file_offset,
         user_buffer, num_bytes)
     ) {
         // In case if copying to the user buffer has failed,
         // return `-EFAULT`, which means "bad address".
         // Before returning, we have to unlock the mutex.
         // -- CRITICAL SECTION END --
-        mutex_unlock(&(device_data->m_mutex));
+        mutex_unlock(&(g_device_data->m_mutex));
         return -EFAULT;
     }
 
     // Store the number of bytes that we copied from the user.
-    device_data->m_device_buffer_data_len = num_bytes;
+    g_device_data->m_device_buffer_data_len = num_bytes;
 
     // Debug info.
-    printk(KERN_ALERT "device_write()>> %zd bytes of data was written to device.\n", num_bytes);
+    PRINT_DEBUG("device_write(): %zd bytes of data was written to device.\n", num_bytes);
 
     for(int i = 0; i < num_bytes; ++i) {
-        printk(KERN_ALERT "%c", *(((char *) 
-            device_data->m_device_buffer) + *file_offset + i)
-        );
+        PRINT_DEBUG("%c", *(((char *) g_device_data->m_device_buffer) + *file_offset + i));
     }
 
-    printk(KERN_ALERT "\n");
+    PRINT_DEBUG("\n");
 
     // -- CRITICAL SECTION END --
-    mutex_unlock(&(device_data->m_mutex));
+    mutex_unlock(&(g_device_data->m_mutex));
 
     // Update the offset of the device buffer.
     *file_offset += num_bytes;

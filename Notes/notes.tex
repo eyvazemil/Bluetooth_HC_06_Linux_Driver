@@ -151,6 +151,13 @@ with \code{AT+NAMEMY-HC-06} worked and I got \code{OKsetname} back from the blue
 described in this thread: \href{https://forum.arduino.cc/t/solved-hc-06-just-wont-talk-with-windows-for-at-commands/665785/8}{
 issue with HC-06 \code{AT} command}.
 
+\section{USB bandwidth}
+A good article that describes microframes, packet sizes, and intervals: 
+\href{https://www.thegoodpenguin.co.uk/blog/understanding-why-usb-isochronous-bandwidth-errors-occur/}{USB bandwidth}.
+
+The used USB device in our FTDI module is USB Mini-B, which is considered a high-speed USB device, just like USB 2.0, as 
+it is illustrated on the chart here: \href{https://www.centralcomputer.com/usb-comparison-chart}{USB types and their speeds}.
+
 
 
 \end{document}
