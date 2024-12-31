@@ -6,7 +6,10 @@
 
 #define FTDI_VENDOR_ID 0x0403
 #define FTDI_PRODUCT_ID 0x6001
-#define TIMER_SCHEDULE_JIFFIES 10
+#define BULK_EP_OUT 0x02
+
+#define TIMER_START_JIFFIES 1000
+#define TIMER_RESCHEDULE_JIFFIES 20
 
 // -------------------------------------------------------------------------
 // Definition of functions for allocating and freeing device data structure.
@@ -79,6 +82,11 @@ static int device_data_allocate(int usb_bulk_endpoint_max_packet_size) {
 // --------------------------------------------------------------------------------------------
 
 /**
+ * Structure with USB device, that will be initialized in `probe()` method.
+ */
+static struct usb_device * g_usb_device = NULL;
+
+/**
  * Timer that is used for reading from the bulk IN endpoint.
  */
 static struct timer_list timer_bulk_in;
@@ -93,17 +101,6 @@ static struct timer_list timer_bulk_out;
  */
 static void schedule_timer(struct timer_list * timer, unsigned long timeout_jiffies) {
     const int is_timer_running = mod_timer(timer, timeout_jiffies);
-
-	if(is_timer_running == 0) {
-		// We will be getting this value, as the timer, at the point of its
-		// handler being called is inactive, as its timeout has already happened.
-		PRINT_DEBUG("schedule_timer(): timer was rescheduled.\n");
-	} else {
-		// We would get here, only if we are modifying the timer, which is still
-		// active, i.e. its timeout hasn't happened and its handler hasn't been called yet,
-		// which is not our case, as we are calling this from timer's handler.
-		PRINT_DEBUG("schedule_timer(): timer is already running.\n");
-	}
 }
 
 /**
@@ -114,10 +111,31 @@ static void timer_handler_bulk_in(struct timer_list * timer) {
     //retval = usb_bulk_msg(device, usb_rcvbulkpipe(device, BULK_EP_IN),
     //        bulk_buf, MAX_PKT_SIZE, &read_cnt, 5000);
 
-    PRINT_DEBUG("timer_handler_bulk_in(): called.\n");
-
     // Reschedule this timer.
-    schedule_timer(timer, TIMER_SCHEDULE_JIFFIES);
+    schedule_timer(timer, TIMER_RESCHEDULE_JIFFIES);
+}
+
+/**
+ * @brief Callback that is called by USB core, once URB has been completed.
+ */
+static void timer_handler_bulk_out_callback(struct urb * urb) {
+    // Check the URB status without considering `-ENOENT`, `-ECONNRESET`, and `-ESHUTDOWN`,
+    // as those are the flags accompanying normal URB transactions.
+    if (urb->status && 
+	    !(urb->status == -ENOENT || 
+	    urb->status == -ECONNRESET ||
+	    urb->status == -ESHUTDOWN)
+    ) {
+		PRINT_DEBUG("timer_handler_bulk_out_callback(): URB bulk OUT failed: %d", urb->status);
+	}
+
+    // todo:_ check this code
+	// Free URB buffer.
+	//usb_buffer_free(urb->dev, urb->transfer_buffer_length, 
+	//	urb->transfer_buffer, urb->transfer_dma
+    //);
+
+    PRINT_DEBUG("timer_handler_bulk_out_callback(): URB has been completed.\n");
 }
 
 /**
@@ -125,10 +143,57 @@ static void timer_handler_bulk_in(struct timer_list * timer) {
  * URB write transaction to USB device.
  */
 static void timer_handler_bulk_out(struct timer_list * timer) {
-    PRINT_DEBUG("timer_handler_bulk_out(): called.\n");
+    if(g_device_data->m_device_buffer_data_len == 0) {
+        // Reschedule this timer, as there is nothing to write into the device.
+        schedule_timer(timer, TIMER_RESCHEDULE_JIFFIES);
+    }
+
+    struct urb * urb = usb_alloc_urb(0, GFP_KERNEL);
+	
+    if (!urb) {
+		goto error;
+	}
+
+    char * urb_buffer = kmalloc(g_device_data->m_device_buffer_data_len * sizeof(char), GFP_KERNEL);
+	
+    if (!urb_buffer) {
+		goto error;
+	}
+
+    // Write our device buffer into URB buffer.
+    for(int i = 0; i < g_device_data->m_device_buffer_data_len; ++i) {
+        urb_buffer[i] = g_device_data->m_device_buffer[i];
+    }
+
+    usb_fill_bulk_urb(urb, g_usb_device,
+		usb_sndbulkpipe(g_usb_device, BULK_EP_OUT),
+		urb_buffer, g_device_data->m_device_buffer_data_len, 
+        timer_handler_bulk_out_callback, g_device_data
+    );
+
+	// Send URB packet.
+	const int urb_submit_status = usb_submit_urb(urb, GFP_KERNEL);
+
+	if (urb_submit_status) {
+		PRINT_DEBUG("timer_handler_bulk_out(): failed to submit urb: %d.\n", urb_submit_status);
+		goto error;
+	}
+
+    PRINT_DEBUG("timer_handler_bulk_out(): successfully submitted urb.\n");
+
+	// Release our reference to this urb.
+	usb_free_urb(urb);
 
     // Reschedule this timer.
-    schedule_timer(timer, TIMER_SCHEDULE_JIFFIES);
+    schedule_timer(timer, TIMER_RESCHEDULE_JIFFIES);
+    return;
+
+error:
+	usb_free_urb(urb);
+	kfree(urb_buffer);
+
+    // Reschedule this timer.
+    schedule_timer(timer, TIMER_RESCHEDULE_JIFFIES);
 }
 
 // -------------------------------------
@@ -247,10 +312,8 @@ void ftdi_usb_driver_deregister(void) {
 }
 
 /**
- * Structures with our usb device and its class, which will be initialized in `probe()` 
- * method of our driver.
+ * Structure with our usb device class, which will be initialized in `probe()` method.
  */
-static struct usb_device * g_usb_device = NULL;
 static struct usb_class_driver g_usb_device_class;
 
 static int driver_probe(struct usb_interface * interface, const struct usb_device_id * device_id) {
@@ -296,8 +359,8 @@ static int driver_probe(struct usb_interface * interface, const struct usb_devic
     kfree(new_usb_class_name_str);
 
     // Schedule both bulk IN and OUT timers.
-    schedule_timer(&timer_bulk_in, TIMER_SCHEDULE_JIFFIES);
-    schedule_timer(&timer_bulk_out, TIMER_SCHEDULE_JIFFIES);
+    schedule_timer(&timer_bulk_in, TIMER_START_JIFFIES);
+    schedule_timer(&timer_bulk_out, TIMER_START_JIFFIES);
 
     return 0;
 }
