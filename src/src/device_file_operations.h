@@ -10,25 +10,14 @@
 #ifndef DEVICE_FILE_OPERATIONS_H
 #define DEVICE_FILE_OPERATIONS_H
 
-/**
- * @brief Allocates device data structure, which will be used in 
- * `read()` and `write()` file operations.
- * Should be called during device registration, before `read()` and `write()`
- * file operations could be called on this device.
- */
-int device_data_allocate(void);
-
-/**
- * @brief Frees device data structure, thus it should be during device deregistration,
- * when we are sure that neither `read()` nor `write()` file operations can be called 
- * on this device.
- */
-void device_data_free(void);
+#include "device_data.h"
 
 /**
  * @brief Returns the `file_operations` structure that has implementation
  * of `open()`, `release()`, `read()`, and `write()`.
+ *
+ * @param device_data Structure that will be used to read from/write to the device file in sysfs.
  */
-struct file_operations * get_file_operations(void);
+struct file_operations * get_file_operations(struct device_data * device_data);
 
 #endif // DEVICE_FILE_OPERATIONS_H

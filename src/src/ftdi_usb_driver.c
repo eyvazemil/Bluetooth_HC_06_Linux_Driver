@@ -6,6 +6,134 @@
 
 #define FTDI_VENDOR_ID 0x0403
 #define FTDI_PRODUCT_ID 0x6001
+#define TIMER_SCHEDULE_JIFFIES 10
+
+// -------------------------------------------------------------------------
+// Definition of functions for allocating and freeing device data structure.
+// -------------------------------------------------------------------------
+
+/**
+ * Device data for storing data from reading from USB bulk IN endpoint and 
+ * writing to USB bulk OUT endpoint.
+ */
+static struct device_data * g_device_data = NULL;
+
+/**
+ * @brief Frees device data structure, thus it should be during device deregistration,
+ * when we are sure that neither `read()` nor `write()` file operations can be called 
+ * on this device.
+ */
+static void device_data_free(void) {
+    if(g_device_data) {
+		// Uninitialize this device only if the device data was successfully allocated.
+		if(g_device_data->m_device_buffer) {
+            // Unitialize this device if the device buffer was 
+            // successfully allocated.
+            kfree(g_device_data->m_device_buffer);
+        }
+
+		kfree(g_device_data);
+	}
+}
+
+/**
+ * @brief Allocates device data structure, which will be used in 
+ * `read()` and `write()` file operations.
+ * Should be called during device registration, before `read()` and `write()`
+ * file operations could be called on this device.
+ */
+static int device_data_allocate(int usb_bulk_endpoint_max_packet_size) {
+    // Allocate device data and memset it to 0.
+	g_device_data = kmalloc(sizeof(struct device_data), GFP_KERNEL);
+
+	if (!g_device_data) {
+		device_data_free();
+		return -ENOMEM;
+	}
+
+	memset(g_device_data, 0, sizeof(struct device_data));
+
+	// Initialize this device buffer and memset it to 0. We set its value to the 
+    // maximum packate size of USB bulk endpoint + 1 (for the ending NUL character).
+    g_device_data->m_device_buffer_size = usb_bulk_endpoint_max_packet_size + 1;
+	g_device_data->m_device_buffer_data_len = 0;
+    g_device_data->m_device_buffer = kmalloc(
+        usb_bulk_endpoint_max_packet_size * sizeof(char), GFP_KERNEL
+    );
+
+    if(!g_device_data->m_device_buffer) {
+        device_data_free();
+        return -ENOMEM;
+    }
+
+    memset(g_device_data->m_device_buffer, 0, usb_bulk_endpoint_max_packet_size * sizeof(char));
+
+    // Initialize mutex.
+    mutex_init(&(g_device_data->m_mutex));
+
+    return 0;
+}
+
+// --------------------------------------------------------------------------------------------
+// Definition of USB bulk IN/OUT endpoint operations along with timer to check those endpoints.
+// --------------------------------------------------------------------------------------------
+
+/**
+ * Timer that is used for reading from the bulk IN endpoint.
+ */
+static struct timer_list timer_bulk_in;
+
+/**
+ * Timer that is used for writing to the bulk OUT endpoint.
+ */
+static struct timer_list timer_bulk_out;
+
+/**
+ * @brief Schedules the timer for provided jiffies value.
+ */
+static void schedule_timer(struct timer_list * timer, unsigned long timeout_jiffies) {
+    const int is_timer_running = mod_timer(timer, timeout_jiffies);
+
+	if(is_timer_running == 0) {
+		// We will be getting this value, as the timer, at the point of its
+		// handler being called is inactive, as its timeout has already happened.
+		PRINT_DEBUG("schedule_timer(): timer was rescheduled.\n");
+	} else {
+		// We would get here, only if we are modifying the timer, which is still
+		// active, i.e. its timeout hasn't happened and its handler hasn't been called yet,
+		// which is not our case, as we are calling this from timer's handler.
+		PRINT_DEBUG("schedule_timer(): timer is already running.\n");
+	}
+}
+
+/**
+ * @brief Called by timer to check USB bulk IN endpoint to make 
+ * URB read transaction from USB device.
+ */
+static void timer_handler_bulk_in(struct timer_list * timer) {
+    //retval = usb_bulk_msg(device, usb_rcvbulkpipe(device, BULK_EP_IN),
+    //        bulk_buf, MAX_PKT_SIZE, &read_cnt, 5000);
+
+    PRINT_DEBUG("timer_handler_bulk_in(): called.\n");
+
+    // Reschedule this timer.
+    schedule_timer(timer, TIMER_SCHEDULE_JIFFIES);
+}
+
+/**
+ * @brief Called by timer to check USB bulk OUT endpoint to make 
+ * URB write transaction to USB device.
+ */
+static void timer_handler_bulk_out(struct timer_list * timer) {
+    PRINT_DEBUG("timer_handler_bulk_out(): called.\n");
+
+    // Reschedule this timer.
+    schedule_timer(timer, TIMER_SCHEDULE_JIFFIES);
+}
+
+// -------------------------------------
+// Definition of `usb_driver` structure.
+// -------------------------------------
 
 /**
  * Structure with our FTDI USB device product and device ids that our driver supports.
@@ -47,17 +175,20 @@ static void driver_disconnect(struct usb_interface * interface);
     .id_table = g_ftdi_devices_table,
 };
 
+int device_data_allocate(int usb_bulk_endpoint_max_packet_size);
+void device_data_free(void);
+
 /**
  * Module name and the class name, which will be used as USB device name and its class name
  * respectively.
  */
 static char * g_usb_device_class_name = NULL;
 
-int ftdi_usb_driver_register(char * usb_device_class_name) {
+int ftdi_usb_driver_register(char * usb_device_class_name, int usb_bulk_endpoint_max_packet_size) {
     g_usb_device_class_name = usb_device_class_name;
 
     // Allocate device data structure that will be used in `read()` and `write()` file operations.
-    int device_data_error = device_data_allocate();
+    int device_data_error = device_data_allocate(usb_bulk_endpoint_max_packet_size);
 
     if(device_data_error) {
         PRINT_DEBUG("ftdi_usb_driver_register(): device data allocation failed with error code: %d\n", 
@@ -66,6 +197,11 @@ int ftdi_usb_driver_register(char * usb_device_class_name) {
 
         return device_data_error;
     }
+
+    // Create timers for bulk IN and OUT endpoints.
+	const int flags = 0;
+	timer_setup(&timer_bulk_in, &timer_handler_bulk_in, flags);
+    timer_setup(&timer_bulk_out, &timer_handler_bulk_out, flags);
 
     // Register this FTDI USB driver.
     const int usb_register_error = usb_register(&g_ftdi_usb_driver);
@@ -84,6 +220,25 @@ int ftdi_usb_driver_register(char * usb_device_class_name) {
 void ftdi_usb_driver_deregister(void) {
     // Deregister this FTDI USB driver.
     usb_deregister(&g_ftdi_usb_driver);
+
+    // Delete timers. In order to make sure that one core doesn't destroy the timer, 
+    // while another executes its handler, we have to use `del_timer_sync()` function,
+	// instead of plain `del_timer()` function.
+	const int is_timer_bulk_in_running = del_timer_sync(&timer_bulk_in);
+
+	if(is_timer_bulk_in_running == 1) {
+		PRINT_DEBUG("ftdi_usb_driver_deregister(): timer_bulk_in is still running after deleting.\n");
+	} else {
+		PRINT_DEBUG("ftdi_usb_driver_deregister(): timer_bulk_in was successfully deleted.\n");
+	}
+
+    const int is_timer_bulk_out_running = del_timer_sync(&timer_bulk_out);
+
+	if(is_timer_bulk_out_running == 1) {
+		PRINT_DEBUG("ftdi_usb_driver_deregister(): timer_bulk_out is still running after deleting.\n");
+	} else {
+		PRINT_DEBUG("ftdi_usb_driver_deregister(): timer_bulk_out was successfully deleted.\n");
+	}
 
     // Free the device data structure, allocated for this device.
     device_data_free();
@@ -121,7 +276,7 @@ static int driver_probe(struct usb_interface * interface, const struct usb_devic
     new_usb_class_name_str[strlen(new_usb_class_name_str)] = '\0';
 
     g_usb_device_class.name = new_usb_class_name_str;
-    g_usb_device_class.fops = get_file_operations();
+    g_usb_device_class.fops = get_file_operations(g_device_data);
 
     // Now register the USB device, so that the kernel creates it a file in sysfs, 
     // i.e. in `/dev/` directory.
@@ -140,7 +295,11 @@ static int driver_probe(struct usb_interface * interface, const struct usb_devic
     // Once registration of USB device is done, we can free the string that we allocated for its name.
     kfree(new_usb_class_name_str);
 
-    return registration_status;
+    // Schedule both bulk IN and OUT timers.
+    schedule_timer(&timer_bulk_in, TIMER_SCHEDULE_JIFFIES);
+    schedule_timer(&timer_bulk_out, TIMER_SCHEDULE_JIFFIES);
+
+    return 0;
 }
 
 static void driver_disconnect(struct usb_interface * interface) {

@@ -10,7 +10,7 @@
  * mode. In non-debug mode, the macro for printing does nothing.
  */
 #ifdef DEBUG_MODE
-#	define PRINT_DEBUG(fmt, args...) printk(KERN_ALERT "__emil_char_driver__>> " fmt, ## args)
+#	define PRINT_DEBUG(fmt, args...) printk(KERN_ALERT fmt, ## args)
 #else
 #	define PRINT_DEBUG(fmt, args...)
 #endif

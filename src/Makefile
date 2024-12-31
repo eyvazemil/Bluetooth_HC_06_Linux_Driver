@@ -11,6 +11,10 @@ CHMOD_PERM = 666
 # Will be used as the name of our USB device in sysfs, i.e. `/dev/` directory.
 DEVICE_CLASS_NAME = emil_hc_06_dev
 
+# Maximum packet size of the USB interface bulk in/out endpoint, which we will use 
+# to make URB transfers of the same buffer size (size is in bytes).
+USB_BULK_ENDPOINT_MAX_PACKET_SIZE = 64
+
 # Major version of the driver, which is read from the `/proc/devices`
 # file, once `insmod` command has been called with the driver `.ko` file 
 # and the driver has already registered itself via `alloc_chrdev_region()` 
@@ -52,7 +56,8 @@ all:
 # `/proc/devices` file, where our driver and its major version are written to.
 load:
 	sudo insmod $(BUILD_DIR)/$(KERNEL_OBJECT_NAME) g_module_name="${MODULE_NAME}" \
-		g_device_class_name="${DEVICE_CLASS_NAME}"
+		g_device_class_name="${DEVICE_CLASS_NAME}" \
+		g_usb_bulk_endpoint_max_packet_size="${USB_BULK_ENDPOINT_MAX_PACKET_SIZE}"
 
 # 	Set permissions to the created device in sysfs.
 	sudo chmod 666 /dev/${DEVICE_CLASS_NAME}0

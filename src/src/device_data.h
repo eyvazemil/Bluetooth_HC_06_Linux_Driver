@@ -34,12 +34,16 @@ struct device_data {
     char * m_device_buffer;
 	
 	/**
-     * Number of bytes allocated for the device buffer.
+     * Number of bytes allocated for the device buffer. Should be equal to the maximum packet 
+     * size of the USB interface bulk in/out endpoints that we will use to read from/write to 
+     * + 1 (for the ending NUL character).
      */
 	int m_device_buffer_size;
 
 	/**
-     * Number of characters written to the buffer (actual data size in the buffer).
+     * Number of characters written to the buffer (actual data size in the buffer). Should have
+     * a maximum value of `m_device_buffer_size` - 1, as we have to reserve the last byte for the
+     * ending NUL character.
      */
 	int m_device_buffer_data_len;
 };

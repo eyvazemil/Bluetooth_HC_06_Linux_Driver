@@ -28,12 +28,19 @@ static char * g_module_name = "emil_bluetooth_hc_06_driver";
 static char * g_device_class_name = "emil_hc_06";
 
 /**
+ * Maximum packet size of the USB interface bulk in/out endpoints, that will be 
+ * used to read the exact number of bytes from that endpoint into our buffer.
+ */
+static int g_usb_bulk_endpoint_max_packet_size = 64;
+
+/**
  * Permission `S_IRUGO` means that the world can see the value of this parameter,
  * but can't change it, where as `S_IRUGO | S_IWUSR` means that only root can change
  * the parameter.
  */
 module_param(g_module_name, charp, S_IRUGO);
 module_param(g_device_class_name, charp, S_IRUGO);
+module_param(g_usb_bulk_endpoint_max_packet_size, int, S_IRUGO);
 
 // --------------------------------------------
 // Initialization and unitialization functions.
@@ -54,8 +61,16 @@ patch-level: %d, sub-level: %d)\n",
 		LINUX_VERSION_PATCHLEVEL, LINUX_VERSION_SUBLEVEL
 	);
 
+	if(g_usb_bulk_endpoint_max_packet_size <= 0) {
+		PRINT_DEBUG("__INIT__ module %s>> invalid value of USB bulk endpoint max size (should be > 0): %d.\n",
+			g_module_name, g_usb_bulk_endpoint_max_packet_size
+		);
+	}
+
 	// Register FTDI USB device.
-	int usb_registration_status = ftdi_usb_driver_register(g_device_class_name);
+	int usb_registration_status = ftdi_usb_driver_register(
+		g_device_class_name, g_usb_bulk_endpoint_max_packet_size
+	);
 
 	if(usb_registration_status) {
 		PRINT_DEBUG("__INIT__ module %s>> failed to register USB device with error: %d\n", 

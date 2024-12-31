@@ -16,7 +16,9 @@
  *
  * @return 0 on success, anything else on failure.
  */
-int ftdi_usb_driver_register(char * usb_device_class_name);
+int ftdi_usb_driver_register(char * usb_device_class_name, 
+    int usb_bulk_endpoint_max_packet_size
+);
 
 /**
  * Registers our FTDI device USB driver.

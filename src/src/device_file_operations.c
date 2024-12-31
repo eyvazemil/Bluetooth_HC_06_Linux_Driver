@@ -17,52 +17,7 @@
 /**
  * Device data for storing data from read and write file operations.
  */
-struct device_data * g_device_data = NULL;
-
-int device_data_allocate(void) {
-    // Allocate device data and memset it to 0.
-	g_device_data = kmalloc(sizeof(struct device_data), GFP_KERNEL);
-
-	if (!g_device_data) {
-		device_data_free();
-		return -ENOMEM;
-	}
-
-	memset(g_device_data, 0, sizeof(struct device_data));
-
-	// Initialize this device buffer and memset it to 0.
-    const int device_buffer_size = 100;
-    g_device_data->m_device_buffer_size = device_buffer_size;
-	g_device_data->m_device_buffer_data_len = 0;
-    g_device_data->m_device_buffer = kmalloc(
-        device_buffer_size * sizeof(char), GFP_KERNEL
-    );
-
-    if(!g_device_data->m_device_buffer) {
-        device_data_free();
-        return -ENOMEM;
-    }
-
-    memset(g_device_data->m_device_buffer, 0, device_buffer_size * sizeof(char));
-
-    // Initialize mutex.
-    mutex_init(&(g_device_data->m_mutex));
-
-    return 0;
-}
-
-void device_data_free(void) {
-    if(g_device_data) {
-		// Uninitialize this device only if the device data was successfully allocated.
-		if(g_device_data->m_device_buffer) {
-            // Unitialize this device if the device buffer was 
-            // successfully allocated.
-            kfree(g_device_data->m_device_buffer);
-        }
-
-		kfree(g_device_data);
-	}
-}
+static struct device_data * g_device_data = NULL;
 
 // -------------------------------------------------------------
 // Declaration of `file_operations` structure and its functions.
@@ -70,8 +25,8 @@ void device_data_free(void) {
 
 // We have to declare the prototypes of the functions first due to the
 // `-Wmissing-prototypes` `gcc` flag that is supplied via kernel Makefile.
-int device_open(struct inode * inode, struct file * filep);
-int device_release(struct inode * inode, struct file * filep);
+static int device_open(struct inode * inode, struct file * filep);
+static int device_release(struct inode * inode, struct file * filep);
 
 /**
  * @brief Reads `num_bytes` number of bytes from `user_buffer` 
@@ -100,7 +55,8 @@ struct file_operations g_file_operations = {
 	.write = device_write
 };
 
-struct file_operations * get_file_operations(void) {
+struct file_operations * get_file_operations(struct device_data * device_data) {
+    g_device_data = device_data;
     return &g_file_operations;
 }
 
